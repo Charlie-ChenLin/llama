@@ -47,7 +47,7 @@ class RMSNorm(torch.nn.Module):
         """
         super().__init__()
         self.eps = eps
-        self.weight = nn.Parameter(torch.ones(dim)) # TODO：欸，这部分应该作为Parameter吗？这个应该是不会被训练到的吧？
+        self.weight = nn.Parameter(torch.ones(dim)) # 注意这个weight是可学习的
 
     def _norm(self, x):
         """
