@@ -75,7 +75,7 @@ def _initialize_affine_weight(
     my_weight_list = weight_list[rank::world_size] # 这里是取当前rank对应的weight
 
     with torch.no_grad():
-        torch.cat(my_weight_list, dim=partition_dim, out=weight) # TODO：这一步是地址操作吗？如果是的话，就能解释为什么可以initialize了
+        torch.cat(my_weight_list, dim=partition_dim, out=weight)
     if return_master_weight:
         return master_weight
     return None

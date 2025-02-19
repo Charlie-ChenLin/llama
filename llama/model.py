@@ -47,7 +47,7 @@ class RMSNorm(torch.nn.Module):
         """
         super().__init__()
         self.eps = eps
-        self.weight = nn.Parameter(torch.ones(dim))
+        self.weight = nn.Parameter(torch.ones(dim)) # TODO：欸，这部分应该作为Parameter吗？这个应该是不会被训练到的吧？
 
     def _norm(self, x):
         """
@@ -349,6 +349,15 @@ class FeedForward(nn.Module):
         )
 
     def forward(self, x):
+        """
+        Forward pass of the FeedForward module.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            torch.Tensor: Output tensor after feedforward.
+        """
         return self.w2(F.silu(self.w1(x)) * self.w3(x))
 
 
