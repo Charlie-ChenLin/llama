@@ -47,7 +47,7 @@ class RMSNorm(torch.nn.Module):
         """
         super().__init__()
         self.eps = eps
-        self.weight = nn.Parameter(torch.ones(dim)) # 注意这个weight是可学习的
+        self.weight = nn.Parameter(torch.ones(dim)) # 注意这个weight是可学习的，对input的每个dim做一个权重
 
     def _norm(self, x):
         """
@@ -334,6 +334,7 @@ class FeedForward(nn.Module):
         super().__init__()
         hidden_dim = int(2 * hidden_dim / 3)
         # custom dim factor multiplier
+        # TODO：这里为什么要这么做？
         if ffn_dim_multiplier is not None:
             hidden_dim = int(ffn_dim_multiplier * hidden_dim)
         hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
