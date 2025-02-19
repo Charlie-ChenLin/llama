@@ -21,7 +21,7 @@ class ModelArgs:
     dim: int = 4096
     n_layers: int = 32
     n_heads: int = 32
-    n_kv_heads: Optional[int] = None
+    n_kv_heads: Optional[int] = None # 
     vocab_size: int = -1  # defined later by tokenizer
     multiple_of: int = 256  # make SwiGLU hidden layer size multiple of large power of 2
     ffn_dim_multiplier: Optional[float] = None
@@ -79,6 +79,7 @@ class RMSNorm(torch.nn.Module):
 
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
     """
+    RoPE编码
     Precompute the frequency tensor for complex exponentials (cis) with given dimensions.
 
     This function calculates a frequency tensor with complex exponentials using the given dimension 'dim'
@@ -95,7 +96,7 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
 
     
         
-
+    
     """
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end, device=freqs.device)  # type: ignore
@@ -106,6 +107,7 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
 
 def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
     """
+    RoPE编码
     Reshape frequency tensor for broadcasting it with another tensor.
 
     This function reshapes the frequency tensor to have the same shape as the target tensor 'x'
@@ -135,6 +137,7 @@ def apply_rotary_emb(
     freqs_cis: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
+    RoPE编码
     Apply rotary embeddings to input tensors using the given frequency tensor.
 
     This function applies rotary embeddings to the given query 'xq' and key 'xk' tensors using the provided
@@ -167,10 +170,11 @@ def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
     if n_rep == 1:
         return x
     return (
-        x[:, :, :, None, :]
+        x[:, :, :, None, :] # (bs, slen, n_kv_heads, 1, head_dim)
         .expand(bs, slen, n_kv_heads, n_rep, head_dim)
         .reshape(bs, slen, n_kv_heads * n_rep, head_dim)
     )
+# expand 方法不会分配新的内存，而是返回原始张量的视图，扩展了指定维度的大小。因此，expand 只能用于大小为 1 的维度扩展。如果需要在非 1 的维度上重复数据，应使用 repeat 方法。
 
 
 class Attention(nn.Module):
@@ -183,7 +187,7 @@ class Attention(nn.Module):
             args (ModelArgs): Model configuration parameters.
 
         Attributes:
-            n_kv_heads (int): Number of key and value heads.
+            n_kv_heads (int): Number of key and value heads. 这里是GQA的实现
             n_local_heads (int): Number of local query heads.
             n_local_kv_heads (int): Number of local key and value heads.
             n_rep (int): Number of repetitions for local heads.
@@ -201,7 +205,7 @@ class Attention(nn.Module):
         model_parallel_size = fs_init.get_model_parallel_world_size()
         self.n_local_heads = args.n_heads // model_parallel_size
         self.n_local_kv_heads = self.n_kv_heads // model_parallel_size
-        self.n_rep = self.n_local_heads // self.n_local_kv_heads
+        self.n_rep = self.n_local_heads // self.n_local_kv_heads # n_rep关系到GQA的实现，很重要
         self.head_dim = args.dim // args.n_heads
 
         self.wq = ColumnParallelLinear(
@@ -270,38 +274,38 @@ class Attention(nn.Module):
             torch.Tensor: Output tensor after attention.
 
         """
-        bsz, seqlen, _ = x.shape
-        xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
+        bsz, seqlen, _ = x.shape # 注意这里x是三维的，所以后面出去的时候return的东西也要是三维的
+        xq, xk, xv = self.wq(x), self.wk(x), self.wv(x) # Attention的Q,K,V一般就是这样算的，用投影矩阵投影
 
         xq = xq.view(bsz, seqlen, self.n_local_heads, self.head_dim)
         xk = xk.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
         xv = xv.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
+        # TODO: Q,K,V的计算是并行的，分步在各个device上，那么这里也是并行的吗？
+        xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis) # 对Q,K做RoPE编码 TODO:为什么只对Q,K做RoPE?
 
-        xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
-
-        self.cache_k = self.cache_k.to(xq)
+        self.cache_k = self.cache_k.to(xq) # torch.Tensor.to(other_Tensor)使本Tensor与other_Tensor的dtype与device相同
         self.cache_v = self.cache_v.to(xq)
 
-        self.cache_k[:bsz, start_pos : start_pos + seqlen] = xk
+        self.cache_k[:bsz, start_pos : start_pos + seqlen] = xk # 因为xk，xv都是(bsz, seqlen, self.n_local_kv_heads, self.head_dim)，而kv_cache是 (args.max_batch_size,args.max_seq_len,self.n_local_kv_heads,self.head_dim),后两纬度都一样，所以这里只要索引前两个纬度
         self.cache_v[:bsz, start_pos : start_pos + seqlen] = xv
 
-        keys = self.cache_k[:bsz, : start_pos + seqlen]
+        keys = self.cache_k[:bsz, : start_pos + seqlen] # 这里存了之前到这一次的所有K,V
         values = self.cache_v[:bsz, : start_pos + seqlen]
 
         # repeat k/v heads if n_kv_heads < n_heads
         keys = repeat_kv(keys, self.n_rep)  # (bs, cache_len + seqlen, n_local_heads, head_dim)
         values = repeat_kv(values, self.n_rep)  # (bs, cache_len + seqlen, n_local_heads, head_dim)
 
-        xq = xq.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
+        xq = xq.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim) 这样使矩阵以头为纬度进行计算，每个batch，每个头内，都是(seqlen,head_dim)的Q,(cache_len+seqlen,head_dim)的K,(cache_len+seqlen,head_dim)的V进行计算，这样就能达到多头注意力的效果
         keys = keys.transpose(1, 2) # (bs, n_local_heads, cache_len + seqlen, head_dim)
         values = values.transpose(1, 2) # (bs, n_local_heads, cache_len + seqlen, head_dim)
-        scores = torch.matmul(xq, keys.transpose(2, 3)) / math.sqrt(self.head_dim)
+        scores = torch.matmul(xq, keys.transpose(2, 3)) / math.sqrt(self.head_dim) # (bs, n_local_heads, seqlen, cache_len+seqlen)
         if mask is not None:
             scores = scores + mask  # (bs, n_local_heads, seqlen, cache_len + seqlen)
-        scores = F.softmax(scores.float(), dim=-1).type_as(xq)
+        scores = F.softmax(scores.float(), dim=-1).type_as(xq)  # 沿最后一维cache_len+seqlen做softmax,注意softmax不改变tensor的形状
         output = torch.matmul(scores, values)  # (bs, n_local_heads, seqlen, head_dim)
-        output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
-        return self.wo(output)
+        output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1) # (bsz, seq_len, n_local_heads * head_dim)
+        return self.wo(output) # TODO: n_local_heads * head_dim < args.dim * head_dim, 为什么这边是这样的？
 
 
 class FeedForward(nn.Module):

@@ -42,8 +42,8 @@ from .utils import VocabUtility, divide_and_check_no_remainder
 
 
 def _initialize_affine_weight(
-    weight: torch.Tensor,
-    out_features: int,
+    weight: torch.Tensor, # torch.Tensor是可变对象，传递给函数时传递的时对象的引用，所以在这个函数内部对weight进行并行化时，这个并行化处理会直接作用于weight
+    out_features: int, # out_Features >= weight.shape[1]
     in_features: int,
     per_partition_size: int,
     partition_dim: int,
@@ -70,12 +70,12 @@ def _initialize_affine_weight(
 
     # Split and copy
     per_partition_per_stride_size = divide_and_check_no_remainder(per_partition_size, stride)
-    weight_list = torch.split(master_weight, per_partition_per_stride_size, dim=partition_dim)
+    weight_list = torch.split(master_weight, per_partition_per_stride_size, dim=partition_dim) # 使用torch.split把weight分成per_partition_per_stride_size的大小。由于per_partition_per_stride_size一般就设置为1，所以每一个partition的大小基本就是per_partition_size
     rank = get_model_parallel_rank()
-    my_weight_list = weight_list[rank::world_size]
+    my_weight_list = weight_list[rank::world_size] # 这里是取当前rank对应的weight
 
     with torch.no_grad():
-        torch.cat(my_weight_list, dim=partition_dim, out=weight)
+        torch.cat(my_weight_list, dim=partition_dim, out=weight) # TODO：这一步是地址操作吗？如果是的话，就能解释为什么可以initialize了
     if return_master_weight:
         return master_weight
     return None
@@ -234,6 +234,8 @@ class ColumnParallelLinear(torch.nn.Module):
         keep_master_weight_for_test: This was added for testing and should be
                                      set to False. It returns the master weights
                                      used for initialization.
+
+    注意: 需要满足 out_features % world_size == 0
     """
 
     def __init__(
@@ -254,7 +256,7 @@ class ColumnParallelLinear(torch.nn.Module):
         self.gather_output = gather_output
         # Divide the weight matrix along the last dimension.
         world_size = get_model_parallel_world_size()
-        self.output_size_per_partition = divide_and_check_no_remainder(out_features, world_size)
+        self.output_size_per_partition = divide_and_check_no_remainder(out_features, world_size) # 这是out_features在partition后的维度
 
         # Parameters.
         # Note: torch.nn.functional.linear performs XA^T + b and as a result
