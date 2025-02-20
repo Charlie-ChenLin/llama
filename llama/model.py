@@ -274,7 +274,7 @@ class Attention(nn.Module):
             torch.Tensor: Output tensor after attention.
 
         """
-        bsz, seqlen, _ = x.shape # 注意这里x是三维的，所以后面出去的时候return的东西也要是三维的
+        bsz, seqlen, _ = x.shape # 注意这里x是三维的，所以后面出去的时候return的东西也要是三维的 (bsz, seq_len, args.dim)
         xq, xk, xv = self.wq(x), self.wk(x), self.wv(x) # Attention的Q,K,V一般就是这样算的，用投影矩阵投影
 
         xq = xq.view(bsz, seqlen, self.n_local_heads, self.head_dim)
@@ -305,7 +305,7 @@ class Attention(nn.Module):
         scores = F.softmax(scores.float(), dim=-1).type_as(xq)  # 沿最后一维cache_len+seqlen做softmax,注意softmax不改变tensor的形状
         output = torch.matmul(scores, values)  # (bs, n_local_heads, seqlen, head_dim)
         output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1) # (bsz, seq_len, n_local_heads * head_dim)
-        return self.wo(output) # TODO: n_local_heads * head_dim < args.dim * head_dim, 为什么这边是这样的？
+        return self.wo(output) # TODO: n_local_heads * head_dim < args.dim * head_dim, 为什么这边是这样的？ (bsz, seq_len, args.dim)
 
 
 class FeedForward(nn.Module):

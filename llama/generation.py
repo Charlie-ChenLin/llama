@@ -156,7 +156,7 @@ class Llama:
 
         """
         params = self.model.params
-        bsz = len(prompt_tokens)
+        bsz = len(prompt_tokens) # batch size其实就是prompt的token个数
         assert bsz <= params.max_batch_size, (bsz, params.max_batch_size)
 
         min_prompt_len = min(len(t) for t in prompt_tokens)
